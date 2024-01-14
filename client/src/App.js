@@ -15,7 +15,7 @@
 
 import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, useMap , Marker, Popup, Polygon} from 'react-leaflet'
-
+import SelectArea from 'leaflet-area-select';
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import './App.css'; // Import CSS file for styling
@@ -37,13 +37,11 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 const UpdateMapView = ({ center }) => {
-  console.log("bruh")
-  console.log(center)
   const map = useMap();
 
   useEffect(() => {
     if (center) {
-      map.setView(center, 20);
+      map.setView(center, 15);
     }
   }, [center, map]);
 
@@ -60,10 +58,58 @@ const App = () => {
   const [locations, setLocations] = useState([]);
   const [mapLoc, setMapLoc] = useState([33.9526, -84.5499])
   const [polygon_locations, setPolygonLocations] = useState([])
+  const [selected_map_coords, setSelectedMapCoords] = useState("")
+
+
+
+  let currentRectangle = null;
+  function AreaSelect() {
+    const map = useMap();
+  
+    useEffect(() => {
+      if (!map.selectArea) return;
+  
+      map.selectArea.enable();
+  
+      if (!window.rectangleEventInitialized) {
+        window.rectangleEventInitialized = true;
+      map.on("areaselected", (e) => {
+        
+        console.log(e.bounds.toBBoxString()); // lon, lat, lon, lat
+        setSelectedMapCoords(e.bounds.toBBoxString());
+      
+        // Remove the previous rectangle if it exists
+        if (currentRectangle && map.hasLayer(currentRectangle)) {
+          currentRectangle.removeFrom(map);
+          map.removeLayer(currentRectangle);
+        }
+        console.log(currentRectangle)
+
+
+        currentRectangle = L.rectangle(e.bounds, { color: "blue", weight: 1, opacity: 0.01 });
+        currentRectangle.addTo(map);
+
+      });
+  
+      // You can restrict selection area like this:
+      const bounds = map.getBounds().pad(-0.25); // save current map bounds as restriction area
+      // check restricted area on start and move
+      map.selectArea.setValidate((layerPoint) => {
+        return bounds.contains(this._map.layerPointToLatLng(layerPoint));
+      });
+  
+      // now switch it off
+      map.selectArea.setValidate();
+    }
+    }, []);
+  
+    return null;
+  }
   
   // Function to handle user input change
   const handleInputChange = (e) => {
     setInputValue(e.target.value);
+   
     
   };
 
@@ -152,98 +198,166 @@ const App = () => {
 }
 
 
-
+useEffect(() => {
+  console.log("Updated locations:", locations);
+}, [locations]); // This useEffect will run whenever 'locations' changes
   // Function to handle user message submission
-  
+const [conversationHistory, setConversationHistory] = useState([]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     console.log(inputValue);
     if (inputValue.trim() !== '') {
       const inputVal = inputValue.trim();
+      var to_api_string = inputVal
+      if (selected_map_coords != "") 
+      {
+        to_api_string += " answer the question based on the area defined by the following two long, lat coordinates " + selected_map_coords
+      }
+      console.log(inputValue);
       setInputValue('');
+      const updatedHistory = [...conversationHistory, { text: to_api_string, sender: 'user' }];
+      setConversationHistory(updatedHistory);
+      console.log(conversationHistory)
       setMessages([...messages, { text: inputVal, sender: 'user' }]);
       setLoading(true);
+      if (1 == 1) {
       try {
+
         //const response = await axios.post('https://sagesgpt-prod.herokuapp.com//api/send_message', { message: inputVal });
-        const response = await axios.post('http://127.0.0.1:5000//api/send_message', { message: inputVal });
-        console.log(response);
+        const response = await axios.post('http://127.0.0.1:5000//api/send_message', { message: to_api_string , conversation: updatedHistory});
+        console.log(response.data);
         const botResponse = response.data.text_response;
-        const annotation_data = response.data.annotation_data;
+        console.log(typeof response.data.annotations.point_overlay)
+        console.log( response.data.annotations.point_overlay.length)
+
+
+        if (response.data.annotations.point_overlay.length > 0) {
+          console.log("there are point overlays in the response")
+          console.log(response.data.annotations.point_overlay)
+
+          const newLocations = response.data.annotations.point_overlay.map(input => {
+            const { description, latitude, longitude } = input;
+            if (input.latitude == null || input.longitude == null || input.description == undefined) {
+              return null;
+            }
+            return {
+              lat: latitude,
+              lng: longitude,
+              description: description[0] // Assuming you want the first description from the array
+            };
+          });
+          // Update the state with the new locations
+          setLocations(newLocations);
+          setMapLoc([newLocations[0].lat, newLocations[0].lng])
+
+        } else {
+          if (response.data.annotations.point_overlay.latitude != undefined )  {
+          console.log("there are point overlays in the response one")
+          console.log(response.data.annotations.point_overlay)
+
+          const { description, latitude, longitude } = response.data.annotations.point_overlay;
+          const location = {
+            lat: latitude,
+            lng: longitude,
+            description: description[0] // Assuming you want the first description
+          };
+          // Update the state with the new location
+          setLocations([location]); // Use an array to handle multiple locations
+          setMapLoc([location.lat, location.lng])
+
+        }
+
+        }
         
-        let list_of_points = annotation_data.list_of_points;
-        if ((list_of_points) != undefined) {
-        list_of_points = fixArray(list_of_points);
-        }
+        // setMapLoc([response.data.latitude, response.data.longitude])
 
-
-        const list_of_polygons =  annotation_data.list_of_polygons;
-
-
-
-        let building_names = annotation_data.building_name;
-
-        if ((building_names) != undefined) {
-        for (let i = 0; i < building_names.length; i++) {
-          if (Array.isArray(building_names[i])) {
-              // Replace the nested array with its elements
-              building_names[i] = building_names[i][0]
-          }
-      }
-    }
-
-      let name_description = annotation_data.name_description;
-
-      if ((name_description) != undefined) {
-      for (let i = 0; i < name_description.length; i++) {
-        if (Array.isArray(name_description[i])) {
-            // Replace the nested array with its elements
-            name_description[i] = name_description[i][0]
-        }
-    }
-  }
-      let list_of_points_fixed = list_of_points
+        
+        
         setMessages([...messages, 
           {text: inputVal, sender: 'user'},
           {text: botResponse, sender: 'chatbot'},
         ]);
-
-        if (list_of_points_fixed != undefined && building_names != undefined) {
-        const locationsData = convertData(list_of_points_fixed, building_names);
-        setLocations(locationsData);
-        }
-        if (list_of_polygons != undefined && name_description != undefined) {
-
-          let result = list_of_polygons.map((polygon, index) => {
-            console.log("polygon")
-            console.log(polygon)
-            return {
-                name: name_description[0],
-                poly: polygon.map(coord => [coord[1], coord[0]])
-            };
-        });
-        // const locationsData_polygons = convertPolygonData(list_of_polygons, name_description )
-        console.log("RESULTTTT")
-        console.log(result)
-
-        setPolygonLocations(result)
-        }
-
-        if (list_of_points_fixed != undefined) {
-        const newCenter = getNewCenter(list_of_points_fixed)
-        console.log("BRUHHHH")
-        console.log(newCenter)
-        setMapLoc(newCenter)
-        console.log(locations)
-        console.log(mapLoc)
-        } 
+        setConversationHistory([...updatedHistory,  {text: botResponse, sender: 'chatbot' }]);
+  //       const latitude = response.data.latitude;
+  //       const longitude = response.data.longitude;
+  //       const annotation_data = response.data.annotation_data;
         
-        else {
-          setMapLoc([33.9526, -84.5499])
-        }
+  //       let list_of_points = annotation_data.list_of_points;
+  //       if ((list_of_points) != undefined) {
+  //       list_of_points = fixArray(list_of_points);
+  //       }
+
+
+  //       const list_of_polygons =  annotation_data.list_of_polygons;
+
+
+
+  //       let building_names = annotation_data.building_name;
+
+  //       if ((building_names) != undefined) {
+  //       for (let i = 0; i < building_names.length; i++) {
+  //         if (Array.isArray(building_names[i])) {
+  //             // Replace the nested array with its elements
+  //             building_names[i] = building_names[i][0]
+  //         }
+  //     }
+  //   }
+
+  //     let name_description = annotation_data.name_description;
+
+  //     if ((name_description) != undefined) {
+  //     for (let i = 0; i < name_description.length; i++) {
+  //       if (Array.isArray(name_description[i])) {
+  //           // Replace the nested array with its elements
+  //           name_description[i] = name_description[i][0]
+  //       }
+  //   }
+  // }
+  //     let list_of_points_fixed = list_of_points
+  //       setMessages([...messages, 
+  //         {text: inputVal, sender: 'user'},
+  //         {text: botResponse, sender: 'chatbot'},
+  //       ]);
+
+  //       if (list_of_points_fixed != undefined && building_names != undefined) {
+  //       const locationsData = convertData(list_of_points_fixed, building_names);
+  //       setLocations(locationsData);
+  //       }
+  //       if (list_of_polygons != undefined && name_description != undefined) {
+
+  //         let result = list_of_polygons.map((polygon, index) => {
+  //           console.log("polygon")
+  //           console.log(polygon)
+  //           return {
+  //               name: name_description[0],
+  //               poly: polygon.map(coord => [coord[1], coord[0]])
+  //           };
+  //       });
+  //       // const locationsData_polygons = convertPolygonData(list_of_polygons, name_description )
+  //       console.log("RESULTTTT")
+  //       console.log(result)
+
+  //       setPolygonLocations(result)
+  //       }
+
+  //       if (list_of_points_fixed != undefined) {
+  //       const newCenter = getNewCenter(list_of_points_fixed)
+  //       console.log("BRUHHHH")
+  //       console.log(newCenter)
+  //       setMapLoc(newCenter)
+  //       console.log(locations)
+  //       console.log(mapLoc)
+  //       } 
+        
+  //       else {
+  //         setMapLoc([33.9526, -84.5499])
+  //       }
 
       } catch (error) {
         console.error('Error:', error);
       }
+    }
       setLoading(false)
       
     }
@@ -303,16 +417,18 @@ const App = () => {
     ))}
   </MapContainer> */}
 
-  <MapContainer center={mapLoc} zoom={13} style={{height: "100vh"}}>
+  <MapContainer center={mapLoc} zoom={6} style={{height: "100vh"}}>
     <TileLayer
       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     />
+    <AreaSelect />
+    
 {
   locations && locations.length > 0 ? (
     locations.map((location, index) => (
       <Marker key={index} position={[location.lat, location.lng]}>
-        <Popup>{location.name}</Popup>
+        {<Popup>{location.description}</Popup>}
       </Marker>
     ))
   ) : (
@@ -349,3 +465,39 @@ export default App;
 //   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
 // />
 // </MapContainer>
+
+
+
+// // Define your Overpass API query
+// var overpassQuery = `
+//     [out:json];
+//     node
+//       [amenity=restaurant]
+//       ({{bbox}});
+//     out;
+// `;
+
+// // Function to make the Overpass API request
+// function requestData() {
+//     var bounds = map.getBounds();
+//     var query = overpassQuery.replace('{{bbox}}', `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`);
+
+//     fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`)
+//         .then(response => response.json())
+//         .then(data => {
+//             // Process the Overpass data and add it to the map
+//             data.elements.forEach(element => {
+//                 if (element.type === "node") {
+//                     L.marker([element.lat, element.lon]).addTo(map)
+//                         .bindPopup(element.tags.name || "No name");
+//                 }
+//             });
+//         })
+//         .catch(error => console.error('Error fetching Overpass data:', error));
+// }
+
+// // Request data when the map is moved or zoomed
+// map.on('moveend', requestData);
+
+// // Initial data request
+// requestData();
